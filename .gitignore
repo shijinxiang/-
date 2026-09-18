@@ -1,0 +1,22 @@
+# Godot 4 local/editor cache
+game/.godot/
+**/.godot/
+
+# Local engine binaries and generated export output
+tools/Godot*.exe
+builds/
+exports/
+
+# ZCode/session-local files
+.zcode/
+
+# Godot generated files
+*.tmp
+*.bak
+*.log
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
