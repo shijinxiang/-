@@ -20,7 +20,7 @@
 - Godot 4.3 stable
 - 逻辑分辨率 640×360，默认窗口 1280×720
 
-仓库不包含 Godot 引擎二进制文件。请从 Godot 官方渠道下载 Godot 4.3 stable，或使用项目原目录中的本地版本：
+仓库不包含 Godot 引擎二进制文件。请从 Godot 官方渠道下载 Godot 4.3 stable：
 
 ```text
 Godot_v4.3-stable_win64.exe --path game
@@ -42,7 +42,7 @@ Esc 打开个人暂停菜单。
 tools\run_selfcheck.bat
 ```
 
-脚本会依次检查工程解析、主菜单启动、战斗冒烟测试和合作场景启动。看到 `SELFTEST_PASS` 才表示自检链全部通过。
+脚本会依次检查工程解析、主菜单启动、战斗冒烟测试和合作场景启动。看到 `SELFTEST_PASS` 才表示本次自检链全部通过。
 
 ## 当前边界
 
