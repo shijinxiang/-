@@ -1,652 +1,366 @@
 extends CharacterBody2D
 class_name Fighter
 
-## 金 / 东 共用角色控制器：移动、跳跃、二段跳、冲刺、普攻、技能、大招、资源。
+## Two-player fighter controller with movement, animation, projectile attacks
+## and close-range attacks.
 
-enum MoveState { GROUNDED, AIRBORNE, DASHING }
-enum ActionState { FREE, ATTACK, SKILL, ULT, HURT, DOWNED, DEAD }
-
-const GRAVITY := 1000.0
-const MAX_SPEED := 150.0
-const ACCEL_GROUND := 1200.0
-const DECEL_GROUND := 1600.0
-const ACCEL_AIR := 800.0
-const JUMP_VEL := -340.0
-const DOUBLE_JUMP_VEL := -300.0
-const MAX_FALL := 600.0
-const COYOTE_TICKS := 6
-const JUMP_BUFFER_TICKS := 6
-const DASH_SPEED := 420.0
-const DASH_DURATION := 9
-const DASH_COOLDOWN := 36
-
-const MAX_HP := 100
-const RAGE_MAX := 300
-const RAGE_START := 100
-const HURT_TICKS := 10
-const DIRECT_PROTECT := 12
-
-const LAYER_WORLD := 1
-const LAYER_FIGHTER := 2
-const LAYER_ENEMY := 4
+const GRAVITY := 1050.0
+const MAX_SPEED := 185.0
+const ACCELERATION := 1500.0
+const DECELERATION := 1900.0
+const JUMP_VELOCITY := -380.0
+const MAX_FALL_SPEED := 650.0
+const WORLD_LEFT := 34.0
+const WORLD_RIGHT := 606.0
+const ATTACK_LOCK_SPEED := 80.0
+const HIT_STUN_TIME := 0.18
+const INVULNERABLE_TIME := 0.24
 
 var player_id := 1
 var character := "jin"
-var team := 0
 var facing := 1
-
-var move_state := MoveState.GROUNDED
-var action_state := ActionState.FREE
-var alive := true
-var downed := false
 var input_enabled := true
-var combat_active := true
+var health := 100.0
+var state := "idle"
 
-var hp := MAX_HP
-var max_hp := MAX_HP
-var velocity_override := Vector2.ZERO
-
-var jump_count := 0
-var coyote_left := COYOTE_TICKS
-var jump_buffer_left := 0
-var _was_on_floor := true
-
-var dash_ticks := 0
-var dash_cooldown := 0
-var air_dash_used := false
-var dash_saved_vy := 0.0
-
-var current_action := ""
-var action_elapsed := 0
-var action_total := 0
-var hit_targets := {}
-
-var protect_ticks := 0
-var hurt_ticks := 0
-
-# 金：拖鞋
-var inventory := 0
-var slippers := []
-var skill_cd := 0
-var ult_cd := 0
-
-# 东：怒气
-var rage := RAGE_START
-var rage_lock := false
-var rage_accum := 0
-
-var teammate: Fighter = null
-var active_flame: Node = null
-
-signal hp_changed
-signal rage_changed
-signal slipper_changed
-signal died
-signal revived
-
-var body_color := Color(0.3, 0.7, 0.4)
+var run_sprite: AnimatedSprite2D
+var body_collision: CollisionShape2D
+var attack_area: Area2D
+var attack_shape: CollisionShape2D
+var visual_state := ""
+var attack_animation := ""
+var attack_projectile_scene := ""
+var attack_projectile_speed := 400.0
+var attack_projectile_damage := 16.0
+var attack_melee_damage := 8.0
+var attack_hitbox_size := Vector2(54.0, 42.0)
+var attack_hitbox_offset := Vector2(32.0, -51.0)
+var attack_spawn_offset := Vector2(42.0, -58.0)
+var attack_active_start := 1
+var attack_active_end := -1
+var hit_stun := 0.0
+var invulnerable := 0.0
+var hit_flash := 0.0
+var attack_triggered := false
+var attack_hit_ids: Dictionary = {}
 
 func _ready() -> void:
-	add_to_group("fighters")
+	collision_layer = 2
+	collision_mask = 1
+	if player_id == 2:
+		facing = -1
+	_configure_attack()
 	_build_body()
-	body_color = Color(0.3, 0.75, 0.35) if character == "jin" else Color(0.85, 0.25, 0.25)
-	if character == "jin":
-		_setup_slippers()
-	hp_changed.emit()
-	rage_changed.emit()
-	slipper_changed.emit()
+	_build_character_sprite()
+	_build_attack_area()
+	_play_visual("standby")
+	queue_redraw()
+
+func _configure_attack() -> void:
+	if character == "dong":
+		_set_attack_profile("dong_attack_2")
+	else:
+		_set_attack_profile("jin_attack_2")
+
+func _set_attack_profile(animation_name: String) -> void:
+	attack_animation = animation_name
+	attack_projectile_scene = ""
+	attack_projectile_speed = 0.0
+	attack_projectile_damage = 0.0
+	attack_hitbox_size = Vector2(54.0, 42.0)
+	attack_hitbox_offset = Vector2(32.0, -51.0)
+	attack_spawn_offset = Vector2(42.0, -58.0)
+	attack_active_start = 1
+	attack_active_end = -1
+
+	match animation_name:
+		"jin_attack_1":
+			attack_melee_damage = 14.0
+			attack_hitbox_size = Vector2(76.0, 50.0)
+			attack_hitbox_offset = Vector2(40.0, -52.0)
+			attack_active_start = 3
+			attack_active_end = 8
+		"dong_attack_1":
+			attack_melee_damage = 13.0
+			attack_hitbox_size = Vector2(72.0, 52.0)
+			attack_hitbox_offset = Vector2(36.0, -52.0)
+			attack_active_start = 2
+			attack_active_end = 6
+		"dong_attack_3":
+			attack_melee_damage = 18.0
+			attack_hitbox_size = Vector2(92.0, 56.0)
+			attack_hitbox_offset = Vector2(48.0, -52.0)
+			attack_active_start = 2
+			attack_active_end = 5
+		"dong_attack_2":
+			attack_projectile_scene = "res://scenes/projectiles/shoulei.tscn"
+			attack_projectile_speed = 360.0
+			attack_projectile_damage = 20.0
+			attack_melee_damage = 10.0
+			attack_hitbox_offset = Vector2(32.0, -51.0)
+			attack_spawn_offset = Vector2(40.0, -58.0)
+		"jin_attack_2":
+			attack_projectile_scene = "res://scenes/projectiles/tuoxie.tscn"
+			attack_projectile_speed = 430.0
+			attack_projectile_damage = 18.0
+			attack_melee_damage = 9.0
+			attack_hitbox_offset = Vector2(32.0, -51.0)
+			attack_spawn_offset = Vector2(44.0, -58.0)
 
 func _build_body() -> void:
-	collision_layer = LAYER_FIGHTER
-	collision_mask = LAYER_WORLD
-	var cs := CollisionShape2D.new()
-	var rect := RectangleShape2D.new()
-	rect.size = Vector2(22, 58)
-	cs.shape = rect
-	cs.position = Vector2(0, -29)
-	add_child(cs)
+	body_collision = CollisionShape2D.new()
+	var shape := RectangleShape2D.new()
+	shape.size = Vector2(22.0, 58.0)
+	body_collision.shape = shape
+	body_collision.position = Vector2(0.0, -29.0)
+	add_child(body_collision)
 
-# ---------------- 每帧主逻辑 ----------------
-func _physics_process(_delta: float) -> void:
-	queue_redraw()
-	if action_state == ActionState.DEAD:
-		return
-	if action_state == ActionState.DOWNED:
-		_tick_downed()
-		return
-	_update_ground_air_state()
-	_process_current_action()
-	_process_hurt()
-	if not alive:
-		return
-	_tick_cooldowns()
+func _build_character_sprite() -> void:
+	var scene_path := "res://tests/jin.tscn" if character == "jin" else "res://tests/dong.tscn"
+	var source_scene := load(scene_path) as PackedScene
+	if source_scene != null:
+		var source_root := source_scene.instantiate()
+		var source_sprite := source_root.get_node_or_null("AnimatedSprite2D") as AnimatedSprite2D
+		if source_sprite != null:
+			run_sprite = source_sprite.duplicate() as AnimatedSprite2D
+		source_root.free()
+
+	if run_sprite == null:
+		run_sprite = _build_fallback_sprite()
+
+	run_sprite.name = "AnimatedSprite2D"
+	run_sprite.position = Vector2(0.0, -46.0)
+	run_sprite.scale = Vector2(0.48, 0.48)
+	run_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	run_sprite.z_index = 2
+	add_child(run_sprite)
+	# The source scenes were authored as looping previews. Runtime attacks
+	# need a single pass so animation_finished can return to idle.
+	for animation_name in _attack_animation_names():
+		if run_sprite.sprite_frames.has_animation(animation_name):
+			run_sprite.sprite_frames.set_animation_loop(animation_name, false)
+	if not run_sprite.frame_changed.is_connected(_on_sprite_frame_changed):
+		run_sprite.frame_changed.connect(_on_sprite_frame_changed)
+	if not run_sprite.animation_finished.is_connected(_on_sprite_animation_finished):
+		run_sprite.animation_finished.connect(_on_sprite_animation_finished)
+
+func _attack_animation_names() -> Array[String]:
 	if character == "dong":
-		_tick_natural_rage()
-	_handle_inputs()
-	_apply_movement()
+		return ["dong_attack_1", "dong_attack_2", "dong_attack_3"]
+	return ["jin_attack_1", "jin_attack_2"]
+
+func _build_fallback_sprite() -> AnimatedSprite2D:
+	var sprite := AnimatedSprite2D.new()
+	var frames := SpriteFrames.new()
+	frames.remove_animation("default")
+	var sheet_path := "res://assets/characters/zhen/jin_chroma.png" if character == "jin" else "res://assets/characters/zhen/dong_chroma.png"
+	var sheet := load(sheet_path) as Texture2D
+	if sheet != null:
+		_add_sheet_animation(frames, "run", sheet, 0, 12.0, 8, Vector2(128.0, 170.0))
+		_add_sheet_animation(frames, "jump", sheet, 2, 10.0, 8, Vector2(128.0, 170.0))
+		_add_sheet_animation(frames, "standby", sheet, 0, 6.0, 1, Vector2(128.0, 170.0))
+	sprite.sprite_frames = frames
+	return sprite
+
+func _add_sheet_animation(frames: SpriteFrames, animation_name: String, sheet: Texture2D, row: int, speed: float, frame_count: int, frame_size: Vector2) -> void:
+	frames.add_animation(animation_name)
+	frames.set_animation_speed(animation_name, speed)
+	frames.set_animation_loop(animation_name, true)
+	for index in frame_count:
+		var frame := AtlasTexture.new()
+		frame.atlas = sheet
+		frame.region = Rect2(Vector2(index * frame_size.x, row * frame_size.y), frame_size)
+		frames.add_frame(animation_name, frame)
+
+func _build_attack_area() -> void:
+	attack_area = Area2D.new()
+	attack_area.name = "AttackHitbox"
+	attack_area.collision_layer = 4
+	attack_area.collision_mask = 2
+	attack_area.monitoring = true
+	attack_area.monitorable = false
+	attack_area.body_entered.connect(_on_attack_body_entered)
+	add_child(attack_area)
+
+	attack_shape = CollisionShape2D.new()
+	var shape := RectangleShape2D.new()
+	shape.size = Vector2(54.0, 42.0)
+	attack_shape.shape = shape
+	attack_shape.disabled = true
+	attack_area.add_child(attack_shape)
+
+func _physics_process(delta: float) -> void:
+	if hit_stun > 0.0:
+		hit_stun = maxf(hit_stun - delta, 0.0)
+		velocity.x = move_toward(velocity.x, 0.0, DECELERATION * delta)
+	else:
+		_process_input(delta)
+
+	if not is_on_floor():
+		velocity.y = minf(velocity.y + GRAVITY * delta, MAX_FALL_SPEED)
+	elif velocity.y > 0.0:
+		velocity.y = 0.0
+
 	move_and_slide()
+	global_position.x = clampf(global_position.x, WORLD_LEFT, WORLD_RIGHT)
+	invulnerable = maxf(invulnerable - delta, 0.0)
+	hit_flash = maxf(hit_flash - delta, 0.0)
 
-# ---------------- 地面/空中状态 ----------------
-func _update_ground_air_state() -> void:
-	var on_floor := is_on_floor()
-	if on_floor:
-		jump_count = 0
-		air_dash_used = false
-		coyote_left = COYOTE_TICKS
-		if move_state == MoveState.AIRBORNE:
-			move_state = MoveState.GROUNDED
-		_was_on_floor = true
+	if state == "attack":
+		velocity.x = move_toward(velocity.x, 0.0, ATTACK_LOCK_SPEED * delta)
+		_update_attack_hitbox()
 	else:
-		if _was_on_floor and jump_count == 0 and move_state != MoveState.DASHING:
-			jump_count = 1  # 走下平台：消耗一次跳跃机会
-		coyote_left = max(0, coyote_left - 1)
-		if move_state == MoveState.GROUNDED and move_state != MoveState.DASHING:
-			move_state = MoveState.AIRBORNE
-		_was_on_floor = false
+		_update_movement_visual()
+	_update_sprite_flip()
+	queue_redraw()
 
-# ---------------- 输入 ----------------
-func is_held(base: String) -> bool:
-	return Input.is_action_pressed(Game.player_action(player_id, base))
+func _process_input(delta: float) -> void:
+	var horizontal := 0.0
+	if input_enabled:
+		if Input.is_action_pressed(Game.player_action(player_id, "move_left")):
+			horizontal -= 1.0
+		if Input.is_action_pressed(Game.player_action(player_id, "move_right")):
+			horizontal += 1.0
+		if Input.is_action_just_pressed(Game.player_action(player_id, "jump")) and is_on_floor() and state != "attack":
+			velocity.y = JUMP_VELOCITY
+		if Input.is_action_just_pressed(Game.player_action(player_id, "attack")) and state != "attack":
+			_start_attack(attack_animation)
+		if character == "jin" and Input.is_action_just_pressed(Game.player_action(player_id, "melee")) and state != "attack":
+			_start_attack("jin_attack_1")
+		if character == "dong" and Input.is_action_just_pressed(Game.player_action(player_id, "melee_1")) and state != "attack":
+			_start_attack("dong_attack_1")
+		if character == "dong" and Input.is_action_just_pressed(Game.player_action(player_id, "melee_3")) and state != "attack":
+			_start_attack("dong_attack_3")
 
-func is_pressed(base: String) -> bool:
-	return Input.is_action_just_pressed(Game.player_action(player_id, base))
-
-func interact_held() -> bool:
-	return is_held("interact")
-
-func _handle_inputs() -> void:
-	if not input_enabled or not combat_active:
+	if state == "attack":
 		return
-	var left := is_held("move_left")
-	var right := is_held("move_right")
-	var h := 0.0
-	if left != right:
-		h = -1.0 if left else 1.0
-		facing = int(h)
-
-	if is_pressed("jump"):
-		jump_buffer_left = JUMP_BUFFER_TICKS
-
-	if is_pressed("ultimate") and _try_start_ultimate():
-		return
-	if is_pressed("skill") and _try_start_skill():
-		return
-	if is_pressed("attack") and _try_start_attack():
-		return
-
-	if action_state != ActionState.FREE:
-		return
-
-	if is_pressed("dash") and _try_start_dash():
-		return
-	if is_pressed("interact"):
-		_try_interact()
-	_apply_horizontal(h)
-	_handle_jump()
-
-func _apply_horizontal(h: float) -> void:
-	if move_state == MoveState.DASHING:
-		velocity.x = facing * DASH_SPEED
-		return
-	var dt := get_physics_process_delta_time()
-	if is_on_floor():
-		var acc := ACCEL_GROUND if h != 0.0 else DECEL_GROUND
-		velocity.x = move_toward(velocity.x, h * MAX_SPEED, acc * dt)
+	if horizontal != 0.0:
+		facing = 1 if horizontal > 0.0 else -1
+		velocity.x = move_toward(velocity.x, horizontal * MAX_SPEED, ACCELERATION * delta)
 	else:
-		velocity.x = move_toward(velocity.x, h * MAX_SPEED, ACCEL_AIR * dt)
+		velocity.x = move_toward(velocity.x, 0.0, DECELERATION * delta)
 
-func _handle_jump() -> void:
-	if jump_buffer_left <= 0:
+func _start_attack(animation_name: String) -> void:
+	if run_sprite == null or not run_sprite.sprite_frames.has_animation(animation_name):
 		return
-	var did := false
-	if move_state == MoveState.DASHING:
-		move_state = MoveState.AIRBORNE
-		velocity.y = 0.0
-	if is_on_floor() or coyote_left > 0:
-		velocity.y = JUMP_VEL
-		jump_count = 1
-		did = true
-	elif jump_count < 2:
-		velocity.y = DOUBLE_JUMP_VEL
-		jump_count += 1
-		did = true
-	if did:
-		jump_buffer_left = 0
+	_set_attack_profile(animation_name)
+	state = "attack"
+	attack_triggered = false
+	attack_hit_ids.clear()
+	velocity.x = 0.0
+	run_sprite.animation = animation_name
+	run_sprite.frame = 0
+	run_sprite.play(animation_name)
+	_update_attack_hitbox()
 
-func _try_start_dash() -> bool:
-	if move_state == MoveState.DASHING:
-		return false
-	if dash_cooldown > 0:
-		return false
-	if not is_on_floor():
-		if air_dash_used:
-			return false
-		air_dash_used = true
-	move_state = MoveState.DASHING
-	dash_ticks = DASH_DURATION
-	dash_cooldown = DASH_COOLDOWN
-	dash_saved_vy = velocity.y
-	velocity.x = facing * DASH_SPEED
-	velocity.y = 0.0
-	return true
-
-func _apply_movement() -> void:
-	if action_state == ActionState.HURT:
-		velocity.x = move_toward(velocity.x, 0.0, 400.0 * get_physics_process_delta_time())
-	if move_state == MoveState.DASHING:
-		dash_ticks -= 1
-		velocity.x = facing * DASH_SPEED
-		velocity.y = 0.0
-		if dash_ticks <= 0:
-			move_state = MoveState.AIRBORNE if not is_on_floor() else MoveState.GROUNDED
-			velocity.y = dash_saved_vy
+func _on_sprite_frame_changed() -> void:
+	if run_sprite == null or state != "attack" or run_sprite.animation != attack_animation:
 		return
-	velocity.y = min(velocity.y + GRAVITY * get_physics_process_delta_time(), MAX_FALL)
+	var last_frame := run_sprite.sprite_frames.get_frame_count(attack_animation) - 1
+	if not attack_projectile_scene.is_empty() and run_sprite.frame >= last_frame and not attack_triggered:
+		attack_triggered = true
+		_spawn_projectile()
+	_update_attack_hitbox()
 
-# ---------------- 动作系统 ----------------
-func _try_start_attack() -> bool:
-	if action_state != ActionState.FREE:
-		return false
-	if character == "jin" and inventory <= 0:
-		return false
-	current_action = "attack"
-	action_state = ActionState.ATTACK
-	action_elapsed = 0
-	action_total = 24
-	hit_targets.clear()
-	velocity.x = 0
-	return true
-
-func _try_start_skill() -> bool:
-	if action_state != ActionState.FREE:
-		return false
-	if character == "jin":
-		if inventory <= 0 or skill_cd > 0:
-			return false
-	else:
-		if rage < 100 or skill_cd > 0:
-			return false
-	current_action = "skill"
-	action_state = ActionState.SKILL
-	action_elapsed = 0
-	action_total = 24
-	return true
-
-func _try_start_ultimate() -> bool:
-	if action_state != ActionState.FREE:
-		return false
-	if not is_on_floor():
-		return false
-	if character == "jin":
-		if ult_cd > 0:
-			return false
-		current_action = "ultimate"
-		action_total = 30
-	else:
-		if rage < RAGE_MAX:
-			return false
-		rage = 0
-		rage_lock = true
-		rage_changed.emit()
-		current_action = "ultimate"
-		action_total = 132
-	action_state = ActionState.ULT
-	action_elapsed = 0
-	return true
-
-func _process_current_action() -> void:
-	match action_state:
-		ActionState.ATTACK:
-			action_elapsed += 1
-			if action_elapsed >= 6 and action_elapsed <= 8:
-				_melee_check()
-			if action_elapsed >= action_total:
-				_end_action()
-		ActionState.SKILL:
-			action_elapsed += 1
-			if character == "jin" and action_elapsed == 9:
-				_throw_slipper()
-			elif character == "dong" and action_elapsed == 10:
-				_throw_grenade()
-			if action_elapsed >= action_total:
-				_end_action()
-		ActionState.ULT:
-			_process_ultimate()
-
-func _process_ultimate() -> void:
-	action_elapsed += 1
-	if character == "jin":
-		if action_elapsed == 18:
-			_spawn_gas()
-		if action_elapsed >= action_total:
-			ult_cd = 720
-			_end_action()
-	else:  # dong
-		if action_elapsed == 18:
-			_start_flame()
-		elif action_elapsed == 109:
-			_stop_flame()
-		if action_elapsed >= action_total:
-			rage_lock = false
-			_end_action()
-
-func _end_action() -> void:
-	action_state = ActionState.FREE
-	current_action = ""
-
-func _process_hurt() -> void:
-	if action_state == ActionState.HURT:
-		hurt_ticks -= 1
-		if hurt_ticks <= 0:
-			action_state = ActionState.FREE
-			current_action = ""
-
-# ---------------- 近战判定 ----------------
-func _melee_check() -> void:
-	var rng := 34.0 if character == "jin" else 26.0
-	var dmg := 10.0 if character == "jin" else 8.0
-	var rect := RectangleShape2D.new()
-	rect.size = Vector2(rng, 40)
-	var space := get_world_2d().direct_space_state
-	var params := PhysicsShapeQueryParameters2D.new()
-	params.shape = rect
-	params.transform = Transform2D(0, global_position + Vector2(facing * (rng * 0.5 + 4), -10))
-	params.collision_mask = LAYER_FIGHTER | LAYER_ENEMY
-	params.exclude = [self]
-	for hit in space.intersect_shape(params, 8):
-		var c: Node = hit.collider
-		if c == null or c == self:
-			continue
-		if hit_targets.has(c.get_instance_id()):
-			continue
-		hit_targets[c.get_instance_id()] = true
-		if not c.has_method("take_damage"):
-			continue
-		if c is Fighter and c.team == team:
-			continue
-		var dir: float = -1.0 if c.global_position.x > global_position.x else 1.0
-		var dealt: bool = c.take_damage(dmg, self, true, Vector2(100 * dir, -100))
-		if character == "dong" and dealt:
-			add_rage(10, "attack_hit")
-
-# ---------------- 金的拖鞋 ----------------
-func _setup_slippers() -> void:
-	slippers.clear()
-	for i in 2:
-		var s := Slipper.new()
-		s.setup(self, i)
-		get_parent().add_child(s)
-		s.global_position = global_position + Vector2(-60 - i * 20, -20)
-		s.visible = false
-		slippers.append(s)
-	inventory = 2
-
-func _get_available_slipper() -> Slipper:
-	for s in slippers:
-		if s.state == "inventory":
-			return s
-	return null
-
-func _throw_slipper() -> void:
-	if inventory <= 0:
+func _on_sprite_animation_finished() -> void:
+	if run_sprite == null or run_sprite.animation != attack_animation:
 		return
-	var s := _get_available_slipper()
-	if s == null:
+	state = "idle"
+	attack_shape.disabled = true
+	attack_hit_ids.clear()
+	_update_movement_visual()
+
+func _spawn_projectile() -> void:
+	var projectile_scene := load(attack_projectile_scene) as PackedScene
+	if projectile_scene == null:
 		return
-	inventory -= 1
-	slipper_changed.emit()
-	s.global_position = global_position + Vector2(facing * 14, -30)
-	s.launch(facing)
-	skill_cd = 24
-
-func reset_slippers() -> void:
-	inventory = 2
-	for s in slippers:
-		s.reset_to_inventory()
-	slipper_changed.emit()
-
-func _try_interact() -> void:
-	if action_state != ActionState.FREE or not alive:
+	var projectile := projectile_scene.instantiate() as ThrownItem
+	if projectile == null:
 		return
-	if character != "jin":
+	projectile.configure(self, facing, attack_projectile_speed, attack_projectile_damage)
+	get_parent().add_child(projectile)
+	projectile.global_position = global_position + Vector2(attack_spawn_offset.x * facing, attack_spawn_offset.y)
+
+func _update_movement_visual() -> void:
+	if run_sprite == null or state == "attack":
 		return
-	if teammate != null and is_instance_valid(teammate) and teammate.downed:
-		if global_position.distance_to(teammate.global_position) <= 32:
-			return  # 优先救援
-	var best: Slipper = null
-	var best_d := 28.0
-	for s in slippers:
-		if s.state != "grounded":
-			continue
-		var d := global_position.distance_to(s.global_position)
-		if d <= best_d and _clear_path_to(s.global_position):
-			if best == null or d < global_position.distance_to(best.global_position):
-				best = s
-				best_d = d
-	if best != null:
-		best.pick_up()
-		inventory = min(2, inventory + 1)
-		slipper_changed.emit()
+	var action := "jump" if not is_on_floor() else ("run" if absf(velocity.x) > 12.0 else "standby")
+	var target_animation := _resolve_animation_name(action)
+	_play_visual(target_animation)
 
-func _clear_path_to(tp: Vector2) -> bool:
-	var space := get_world_2d().direct_space_state
-	var q := PhysicsRayQueryParameters2D.create(
-		global_position + Vector2(0, -20), tp + Vector2(0, -10), LAYER_WORLD)
-	q.exclude = [self]
-	return space.intersect_ray(q).is_empty()
+func _resolve_animation_name(action: String) -> String:
+	if action == "standby":
+		return "standby"
+	var character_animation := "%s_%s" % [character, action]
+	if run_sprite != null and run_sprite.sprite_frames != null and run_sprite.sprite_frames.has_animation(character_animation):
+		return character_animation
+	return action
 
-# ---------------- 东的技能 ----------------
-func _throw_grenade() -> void:
-	if rage < 100:
+func _play_visual(animation_name: String) -> void:
+	if run_sprite == null or run_sprite.sprite_frames == null or not run_sprite.sprite_frames.has_animation(animation_name):
 		return
-	rage -= 100
-	rage_changed.emit()
-	var g := Grenade.new()
-	g.setup(self)
-	get_parent().add_child(g)
-	g.global_position = global_position + Vector2(facing * 14, -30)
-	g.launch(facing)
-	skill_cd = 36  # 手雷冷却
+	if visual_state != animation_name:
+		visual_state = animation_name
+		run_sprite.animation = animation_name
+		run_sprite.frame = 0
+		run_sprite.play(animation_name)
+	elif not run_sprite.is_playing():
+		run_sprite.play(animation_name)
+	_update_sprite_flip()
 
-func _start_flame() -> void:
-	var f := Flame.new()
-	f.setup(self)
-	get_parent().add_child(f)
-	active_flame = f
+func _update_sprite_flip() -> void:
+	if run_sprite != null:
+		run_sprite.flip_h = facing < 0
+		run_sprite.modulate = Color(1.0, 0.55, 0.55) if hit_flash > 0.0 else Color.WHITE
 
-func _stop_flame() -> void:
-	if active_flame != null and is_instance_valid(active_flame):
-		active_flame.queue_free()
-	active_flame = null
-
-func _spawn_gas() -> void:
-	var g := GasCloud.new()
-	g.setup(self)
-	get_parent().add_child(g)
-	g.global_position = global_position + Vector2(facing * 36, -24)
-
-# ---------------- 怒气 ----------------
-func add_rage(amount: int, _reason: String) -> void:
-	if character != "dong":
+func _update_attack_hitbox() -> void:
+	if attack_shape == null:
 		return
-	if rage_lock or not alive:
+	attack_shape.position = Vector2(attack_hitbox_offset.x * facing, attack_hitbox_offset.y)
+	var rectangle := attack_shape.shape as RectangleShape2D
+	if rectangle != null:
+		rectangle.size = attack_hitbox_size
+	if state != "attack" or run_sprite == null:
+		attack_shape.disabled = true
 		return
-	rage = clampi(rage + amount, 0, RAGE_MAX)
-	rage_changed.emit()
+	var frame_count := run_sprite.sprite_frames.get_frame_count(attack_animation)
+	var active_end := attack_active_end if attack_active_end >= 0 else frame_count - 2
+	var active := run_sprite.frame >= attack_active_start and run_sprite.frame <= active_end
+	attack_shape.disabled = not active
 
-func _tick_natural_rage() -> void:
-	if not combat_active or not input_enabled or not alive:
+func _on_attack_body_entered(body: Node) -> void:
+	if state != "attack" or body == self or not body.has_method("receive_hit"):
 		return
-	if rage_lock:
+	var id := body.get_instance_id()
+	if attack_hit_ids.has(id):
 		return
-	rage_accum += 1
-	if rage_accum >= 60:
-		rage_accum = 0
-		add_rage(8, "passive")
+	attack_hit_ids[id] = true
+	body.receive_hit(attack_melee_damage, self, Vector2(170.0 * facing, -70.0))
 
-# ---------------- 伤害 / 状态 ----------------
-func take_damage(dmg: float, source: Node = null, direct: bool = true,
-		knockback: Vector2 = Vector2.ZERO) -> bool:
-	if not alive:
-		return false
-	if action_state == ActionState.DEAD or action_state == ActionState.DOWNED:
-		return false
-	if protect_ticks > 0 and direct:
-		return false
-	if direct:
-		protect_ticks = DIRECT_PROTECT
-	var dealt := minf(dmg, hp)
-	hp = clampi(int(hp - dmg), 0, MAX_HP)
-	hp_changed.emit()
-	if character == "dong" and not rage_lock:
-		add_rage(2 * int(dealt), "hurt")
-	if direct:
-		_enter_hurt(knockback)
-	if hp <= 0:
-		_on_killed()
-	return true
+func receive_hit(amount: float, _source: Node = null, knockback := Vector2.ZERO) -> void:
+	if invulnerable > 0.0:
+		return
+	health = maxf(health - amount, 0.0)
+	invulnerable = INVULNERABLE_TIME
+	hit_stun = HIT_STUN_TIME
+	velocity = knockback
+	hit_flash = INVULNERABLE_TIME
+	if state == "attack":
+		state = "idle"
+		if attack_shape != null:
+			attack_shape.disabled = true
+		if run_sprite != null:
+			run_sprite.stop()
+	if health <= 0.0:
+		# Keep the short prototype round alive; the next hit starts from full
+		# health instead of introducing an unfinished defeat screen.
+		health = 100.0
+	queue_redraw()
 
-func _enter_hurt(knockback: Vector2) -> void:
-	if character == "jin" and action_state == ActionState.ULT:
-		# 气团已经生成或大招已被接受时，打断也必须进入冷却。
-		ult_cd = max(ult_cd, 720)
-	if character == "dong" and action_state == ActionState.ULT:
-		_stop_flame()
-		rage_lock = false
-	current_action = ""
-	action_state = ActionState.HURT
-	hurt_ticks = HURT_TICKS
-	velocity.x = knockback.x
-	velocity.y = knockback.y
-	if move_state == MoveState.DASHING:
-		move_state = MoveState.AIRBORNE
-
-func _on_killed() -> void:
-	if Game.mode == "coop":
-		enter_downed()
-	else:
-		_die()
-
-func _die() -> void:
-	alive = false
-	action_state = ActionState.DEAD
-	current_action = ""
-	velocity = Vector2.ZERO
-	if character == "dong":
-		_stop_flame()
-	died.emit()
-
-func enter_downed() -> void:
-	alive = false
-	downed = true
-	action_state = ActionState.DOWNED
-	current_action = ""
-	downed_timer = 900
-	velocity = Vector2.ZERO
-	if character == "dong":
-		_stop_flame()
-	died.emit()
-
-var downed_timer := 0
-
-func _tick_downed() -> void:
-	downed_timer -= 1
-	if downed_timer <= 0:
-		downed = false
-		action_state = ActionState.DEAD
-
-func rescue_fighter() -> void:
-	downed = false
-	alive = true
-	action_state = ActionState.FREE
-	current_action = ""
-	hp = 30
-	protect_ticks = 60
-	hp_changed.emit()
-	revived.emit()
-
-func full_revive() -> void:
-	downed = false
-	alive = true
-	action_state = ActionState.FREE
-	current_action = ""
-	velocity = Vector2.ZERO
-	hp = MAX_HP
-	protect_ticks = 60
-	move_state = MoveState.GROUNDED
-	jump_count = 0
-	hp_changed.emit()
-	rage_changed.emit()
-	if character == "dong":
-		rage = RAGE_START
-		rage_lock = false
-		_stop_flame()
-	else:
-		reset_slippers()
-
-func reset_for_round() -> void:
-	alive = true
-	downed = false
-	hp = MAX_HP
-	action_state = ActionState.FREE
-	current_action = ""
-	move_state = MoveState.GROUNDED
-	jump_count = 0
-	coyote_left = COYOTE_TICKS
-	jump_buffer_left = 0
-	dash_ticks = 0
-	dash_cooldown = 0
-	air_dash_used = false
-	protect_ticks = 0
-	hurt_ticks = 0
-	ult_cd = 0
-	skill_cd = 0
-	velocity = Vector2.ZERO
-	hit_targets.clear()
-	hp_changed.emit()
-	if character == "dong":
-		rage = RAGE_START
-		rage_lock = false
-		rage_accum = 0
-		_stop_flame()
-		rage_changed.emit()
-	else:
-		reset_slippers()
-
-# ---------------- 冷却 ----------------
-func _tick_cooldowns() -> void:
-	if dash_cooldown > 0:
-		dash_cooldown -= 1
-	if skill_cd > 0:
-		skill_cd -= 1
-	if ult_cd > 0:
-		ult_cd -= 1
-	if protect_ticks > 0:
-		protect_ticks -= 1
-
-# ---------------- 绘制 ----------------
 func _draw() -> void:
-	var col := body_color
-	if action_state == ActionState.DOWNED:
-		draw_rect(Rect2(-16, -12, 32, 10), col.darkened(0.2))
-		draw_circle(Vector2(14, -8), 7, col)
-		draw_string(ThemeDB.fallback_font, Vector2(-20, 8), "倒地", HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color(1.0, 0.85, 0.25))
-		return
-	if not alive:
-		return
-	if action_state == ActionState.HURT:
-		col = Color(1, 1, 1)
-	# 腿
-	draw_rect(Rect2(-9, -22, 8, 22), col.darkened(0.2))
-	draw_rect(Rect2(1, -22, 8, 22), col.darkened(0.2))
-	# 身体
-	draw_rect(Rect2(-11, -56, 22, 34), col)
-	# 头
-	draw_circle(Vector2(0, -62), 8, col.lightened(0.15))
-	# 面向的眼睛
-	draw_circle(Vector2(facing * 3.0, -63), 2.0, Color(1, 1, 1))
-	# 东：红色小背包示意；金：拖鞋手持示意
-	if character == "dong":
-		draw_rect(Rect2(-facing * 8, -50, 6, 16), Color(0.55, 0.1, 0.1))
-	elif inventory > 0:
-		draw_rect(Rect2(facing * 6, -40, 8, 4), Color(0.85, 0.8, 0.4))
+	draw_set_transform(Vector2(0.0, 2.0), 0.0, Vector2(1.0, 0.42))
+	draw_circle(Vector2.ZERO, 22.0, Color(0.02, 0.05, 0.08, 0.28))
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	if run_sprite == null or run_sprite.sprite_frames == null:
+		draw_rect(Rect2(-11.0, -58.0, 22.0, 58.0), Color(0.3, 0.75, 0.35), true)
+		draw_circle(Vector2(0.0, -68.0), 11.0, Color(0.38, 0.83, 0.42))

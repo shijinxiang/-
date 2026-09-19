@@ -1,263 +1,165 @@
 extends Node2D
-## 对战（及练习）场景：回合结算、倒计时、比分。
 
-const ROUND_LENGTH := 5400   # 90 秒
-const COUNTDOWN := 180       # 3 秒
-const ROUND_END_WAIT := 120  # 2 秒
-
-var practice := false
 var p1: Fighter
 var p2: Fighter
-var hud: HUD
-
-var phase := "countdown"  # countdown / fight / round_end / match_end / paused
-var countdown := 0
-var round_timer := 0
-var round_end_timer := 0
-var score := [0, 0]
-var round_num := 1
-var result_text := ""
-var pending_death: Fighter = null
-var dead_ticks := [0, 0]
-
-var pause_menu: Control
-var dummies: Array = []
+var pause_overlay: Control
+var pause_info: Label
+var info_button: Button
+var map_info: Dictionary
 
 func _ready() -> void:
-	practice = Game.practice
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	map_info = Game.map_data()
 	_setup_world()
 	_setup_fighters()
-	_setup_hud()
-	_setup_pause_menu()
-	_start_round()
+	_setup_interface()
 
 func _setup_world() -> void:
-	# 地面
-	_add_static_rect(Rect2(32, 300, 576, 60), Color(0.4, 0.5, 0.6))
-	# 左右墙
-	_add_static_rect(Rect2(32, 0, 12, 300), Color(0.3, 0.4, 0.5))
-	_add_static_rect(Rect2(596, 0, 12, 300), Color(0.3, 0.4, 0.5))
-	# 两个小平台（高差 48）
-	_add_static_rect(Rect2(190, 252, 100, 8), Color(0.6, 0.5, 0.35))
-	_add_static_rect(Rect2(350, 252, 100, 8), Color(0.6, 0.5, 0.35))
-	var cam := Camera2D.new()
-	cam.position = Vector2(320, 180)
-	add_child(cam)
+	var background_texture := load(map_info.get("background", "res://assets/background/图书馆.jpg")) as Texture2D
+	if background_texture == null:
+		return
+	var background := Sprite2D.new()
+	background.texture = background_texture
+	background.position = Vector2(320, 180)
+	var scale_factor := maxf(640.0 / background_texture.get_width(), 360.0 / background_texture.get_height())
+	background.scale = Vector2(scale_factor, scale_factor)
+	background.modulate = Color(0.92, 0.95, 1.0, 1.0)
+	background.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	background.z_index = -20
+	add_child(background)
+	var ground_y: float = map_info.get("ground_y", 320.0)
+	_add_collision_rect(Rect2(0, ground_y, 640, 360.0 - ground_y))
+	_add_collision_rect(Rect2(0, 0, 18, 360))
+	_add_collision_rect(Rect2(622, 0, 18, 360))
 
-func _add_static_rect(rect: Rect2, color: Color) -> void:
+func _add_collision_rect(rect: Rect2) -> void:
 	var body := StaticBody2D.new()
 	body.position = rect.position + rect.size * 0.5
-	var cs := CollisionShape2D.new()
+	var collision := CollisionShape2D.new()
 	var shape := RectangleShape2D.new()
 	shape.size = rect.size
-	cs.shape = shape
-	body.add_child(cs)
-	var vis := ColorRect.new()
-	vis.size = rect.size
-	vis.position = -rect.size * 0.5
-	vis.color = color
-	body.add_child(vis)
+	collision.shape = shape
+	body.add_child(collision)
 	add_child(body)
 
 func _setup_fighters() -> void:
-	p1 = _make_fighter(1, "jin", 0, Vector2(160, 300))
-	p2 = _make_fighter(2, "dong", 1, Vector2(480, 300))
-	p1.died.connect(_on_fighter_died.bind(p1))
-	p2.died.connect(_on_fighter_died.bind(p2))
-	if practice:
-		_spawn_dummy(Vector2(300, 300))
-		_spawn_dummy(Vector2(420, 300))
+	p1 = _make_fighter(1, "jin", map_info.get("spawn_left", Vector2(190, 300)))
+	p2 = _make_fighter(2, "dong", map_info.get("spawn_right", Vector2(450, 300)))
 
-func _make_fighter(pid: int, ch: String, team: int, pos: Vector2) -> Fighter:
-	var f := Fighter.new()
-	f.player_id = pid
-	f.character = ch
-	f.team = team
-	f.global_position = pos
-	add_child(f)
-	return f
+func _make_fighter(pid: int, kind: String, spawn_position: Vector2) -> Fighter:
+	var fighter: Fighter = Fighter.new()
+	fighter.player_id = pid
+	fighter.character = kind
+	fighter.global_position = spawn_position
+	add_child(fighter)
+	return fighter
 
-func _spawn_dummy(pos: Vector2) -> void:
-	var e := Enemy.new()
-	e.setup(Enemy.EType.CHASER)
-	e.set_dummy(true)
-	e.hp = 99999
-	e.max_hp = 99999
-	e.global_position = pos
-	add_child(e)
-	dummies.append(e)
+func _setup_interface() -> void:
+	var canvas := CanvasLayer.new()
+	canvas.layer = 5
+	add_child(canvas)
+	var root := Control.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	canvas.add_child(root)
 
-func _setup_hud() -> void:
-	hud = HUD.new()
-	hud.setup(p1, p2, self)
-	add_child(hud)
+	var top_bar := ColorRect.new()
+	top_bar.position = Vector2(0, 0)
+	top_bar.size = Vector2(640, 48)
+	top_bar.color = Color(0.02, 0.06, 0.1, 0.72)
+	top_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(top_bar)
+	_add_label(root, map_info.get("name", "移动场景"), Vector2(220, 8), Vector2(200, 30), 20, Color(0.96, 0.9, 0.63), HORIZONTAL_ALIGNMENT_CENTER)
+	_add_label(root, "金", Vector2(24, 9), Vector2(40, 28), 19, Color(0.36, 0.9, 0.55), HORIZONTAL_ALIGNMENT_LEFT)
+	_add_label(root, "东", Vector2(576, 9), Vector2(40, 28), 19, Color(1.0, 0.42, 0.36), HORIZONTAL_ALIGNMENT_RIGHT)
 
-func _setup_pause_menu() -> void:
-	pause_menu = Control.new()
-	# 暂停菜单必须在暂停树上继续处理输入和按钮事件。
-	pause_menu.process_mode = Node.PROCESS_MODE_WHEN_PAUSED
-	pause_menu.visible = false
-	pause_menu.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	pause_overlay = Control.new()
+	pause_overlay.name = "PauseOverlay"
+	pause_overlay.process_mode = Node.PROCESS_MODE_WHEN_PAUSED
+	pause_overlay.visible = false
+	pause_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	pause_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	root.add_child(pause_overlay)
+	_build_pause_menu()
+
+func _build_pause_menu() -> void:
 	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.6)
 	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	pause_menu.add_child(dim)
-	var title := Label.new()
-	title.text = "暂停"
-	title.add_theme_font_size_override("font_size", 36)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.anchor_left = 0.0
-	title.anchor_right = 1.0
-	title.offset_top = 120
-	pause_menu.add_child(title)
-	_add_pause_button("返回主菜单", 170, func(): _close_pause(); Game.to_menu())
-	add_child(pause_menu)
+	dim.color = Color(0.01, 0.02, 0.04, 0.78)
+	pause_overlay.add_child(dim)
 
-func _add_pause_button(text: String, y: int, cb: Callable) -> void:
-	var b := Button.new()
-	b.text = text
-	b.custom_minimum_size = Vector2(200, 44)
-	b.position = Vector2(320 - 100, y)
-	b.pressed.connect(cb)
-	pause_menu.add_child(b)
+	var panel := Panel.new()
+	panel.position = Vector2(115, 24)
+	panel.size = Vector2(410, 314)
+	panel.add_theme_stylebox_override("panel", _panel_style(Color(0.05, 0.1, 0.16, 0.97), Color(0.38, 0.75, 0.9)))
+	pause_overlay.add_child(panel)
+	_add_label(panel, "暂停", Vector2(0, 18), Vector2(410, 34), 30, Color(0.98, 0.9, 0.62), HORIZONTAL_ALIGNMENT_CENTER)
+	pause_info = _add_label(panel, "金：A / D 移动，Space 跳跃\n金：J 投掷拖鞋，K 近战\n东：方向键移动，↑ 跳跃\n东：1 手雷，2 近战一，3 近战三", Vector2(30, 70), Vector2(350, 92), 14, Color(0.86, 0.91, 0.97), HORIZONTAL_ALIGNMENT_LEFT)
+	pause_info.visible = false
+	_make_button(panel, "继续游戏", Vector2(114, 174), Vector2(182, 38), _close_pause)
+	info_button = _make_button(panel, "人物招式", Vector2(114, 222), Vector2(182, 38), _toggle_pause_info)
+	_make_button(panel, "返回菜单", Vector2(114, 270), Vector2(182, 38), _return_to_menu)
+
+func _toggle_pause_info() -> void:
+	pause_info.visible = not pause_info.visible
+	if pause_info.visible:
+		info_button.text = "关闭说明"
+	else:
+		info_button.text = "人物招式"
+
+func _return_to_menu() -> void:
+	_close_pause()
+	Game.to_menu()
 
 func _toggle_pause() -> void:
-	pause_menu.visible = not pause_menu.visible
-	get_tree().paused = pause_menu.visible
+	pause_overlay.visible = not pause_overlay.visible
+	get_tree().paused = pause_overlay.visible
 
 func _close_pause() -> void:
-	pause_menu.visible = false
+	pause_overlay.visible = false
 	get_tree().paused = false
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed(Game.player_action(1, "menu")):
+	if event.is_action_pressed("menu"):
 		_toggle_pause()
 
-func _start_round() -> void:
-	phase = "countdown"
-	countdown = COUNTDOWN
-	round_timer = ROUND_LENGTH
-	result_text = ""
-	pending_death = null
-	_clear_temp()
-	p1.input_enabled = false
-	p2.input_enabled = false
-	p1.reset_for_round()
-	p2.reset_for_round()
-	p1.global_position = Vector2(160, 300)
-	p2.global_position = Vector2(480, 300)
-	p1.velocity = Vector2.ZERO
-	p2.velocity = Vector2.ZERO
+func _add_label(parent: Node, text_value: String, control_position: Vector2, control_size: Vector2, font_size: int, color: Color, alignment: HorizontalAlignment) -> Label:
+	var label := Label.new()
+	label.text = text_value
+	label.position = control_position
+	label.size = control_size
+	label.add_theme_font_size_override("font_size", font_size)
+	label.add_theme_color_override("font_color", color)
+	label.horizontal_alignment = alignment
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	parent.add_child(label)
+	return label
 
-func _clear_temp() -> void:
-	for child in get_children():
-		if child is Grenade or child is GasCloud or child is Flame:
-			child.queue_free()
+func _make_button(parent: Node, text_value: String, control_position: Vector2, control_size: Vector2, callback: Callable) -> Button:
+	var button := Button.new()
+	button.text = text_value
+	button.position = control_position
+	button.size = control_size
+	button.focus_mode = Control.FOCUS_ALL
+	button.add_theme_font_size_override("font_size", 16)
+	button.add_theme_stylebox_override("normal", _button_style(Color(0.1, 0.2, 0.3, 0.96), Color(0.25, 0.55, 0.72)))
+	button.add_theme_stylebox_override("hover", _button_style(Color(0.16, 0.34, 0.45, 1.0), Color(0.42, 0.82, 0.92)))
+	button.add_theme_stylebox_override("pressed", _button_style(Color(0.25, 0.48, 0.52, 1.0), Color(0.95, 0.78, 0.35)))
+	button.pressed.connect(callback)
+	parent.add_child(button)
+	return button
 
-func _physics_process(_delta: float) -> void:
-	if pause_menu.visible:
-		return
-	match phase:
-		"countdown":
-			countdown -= 1
-			if countdown <= 0:
-				phase = "fight"
-				p1.input_enabled = true
-				p2.input_enabled = true
-		"fight":
-			round_timer -= 1
-			if pending_death != null:
-				var loser: Fighter = pending_death
-				pending_death = null
-				if not p1.alive and not p2.alive:
-					_finish_round(0)
-				elif loser == p1:
-					_finish_round(2)
-				else:
-					_finish_round(1)
-			elif round_timer <= 0:
-				_time_up()
-		"round_end":
-			round_end_timer -= 1
-			if round_end_timer <= 0:
-				_advance_round()
-		"match_end":
-			round_end_timer -= 1
-			if round_end_timer <= 0:
-				Game.to_menu()
-	if practice:
-		_tick_practice_respawn()
+func _panel_style(fill: Color, border: Color) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = fill
+	style.border_color = border
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(8)
+	return style
 
-func _tick_practice_respawn() -> void:
-	var arr := [p1, p2]
-	for i in 2:
-		var f: Fighter = arr[i]
-		if not f.alive or f.action_state == Fighter.ActionState.DEAD:
-			dead_ticks[i] += 1
-			if dead_ticks[i] >= 120:
-				dead_ticks[i] = 0
-				f.reset_for_round()
-				f.global_position = Vector2(160 if i == 0 else 480, 300)
-				f.velocity = Vector2.ZERO
-		else:
-			dead_ticks[i] = 0
-
-func _on_fighter_died(f: Fighter) -> void:
-	if practice:
-		return
-	if phase == "fight":
-		pending_death = f
-
-func _time_up() -> void:
-	if phase != "fight":
-		return
-	if p1.hp > p2.hp:
-		_finish_round(1)
-	elif p2.hp > p1.hp:
-		_finish_round(2)
-	else:
-		_finish_round(0)
-
-func _finish_round(winner: int) -> void:
-	if phase != "fight":
-		return
-	phase = "round_end"
-	round_end_timer = ROUND_END_WAIT
-	p1.input_enabled = false
-	p2.input_enabled = false
-	if winner == 0:
-		result_text = "平局"
-	elif winner == 1:
-		score[0] += 1
-		result_text = "金获胜"
-	else:
-		score[1] += 1
-		result_text = "东获胜"
-
-func _advance_round() -> void:
-	if score[0] >= 2 or score[1] >= 2:
-		phase = "match_end"
-		round_end_timer = 180
-		result_text = "金获得比赛胜利" if score[0] > score[1] else "东获得比赛胜利"
-	else:
-		round_num += 1
-		_start_round()
-
-# ---------------- HUD 接口 ----------------
-func hud_banner_text() -> String:
-	match phase:
-		"countdown":
-			return "第 %d 回合  开始: %d" % [round_num, ceili(countdown / 60.0)]
-		"fight":
-			return "第 %d 回合  %d:%02d  金 %d : %d 东" % [
-				round_num, round_timer / 60, round_timer % 60, score[0], score[1]]
-		"round_end":
-			return result_text + "   金 %d : %d 东" % [score[0], score[1]]
-		"match_end":
-			return result_text
-	return ""
-
-func hud_bottom_text() -> String:
-	if phase == "match_end":
-		return "即将返回主菜单…"
-	return ""
+func _button_style(fill: Color, border: Color) -> StyleBoxFlat:
+	var style := _panel_style(fill, border)
+	style.set_corner_radius_all(5)
+	style.content_margin_left = 12.0
+	style.content_margin_right = 12.0
+	return style

@@ -1,44 +1,30 @@
 # 测试记录
 
-日期：2026-09-18
-环境：Windows 10 x64，Godot 4.3 stable（项目内 tools/Godot_v4.3-stable_win64_console.exe）
+日期：2026-09-19
+环境：Windows 10 x64，Godot 4.3 stable（项目内 `tools/Godot_v4.3-stable_win64_console.exe`）
 
 ## 已执行
 
 | 测试 | 命令 | 结果 |
 |---|---|---|
-| 编辑器/脚本解析 | `Godot_v4.3-stable_win64_console.exe --headless --path game --editor --quit` | 通过，无脚本解析错误 |
-| 主场景无界面启动 | `Godot_v4.3-stable_win64_console.exe --headless --path game --quit-after 3` | 通过，正常启动并退出 |
+| 工程与脚本解析 | `Godot_v4.3-stable_win64_console.exe --headless --path game --editor --quit` | 通过 |
+| 主菜单启动 | `Godot_v4.3-stable_win64_console.exe --headless --path game --quit-after 2` | 通过 |
+| 移动场景启动 | `Godot_v4.3-stable_win64_console.exe --headless --path game res://scenes/arena.tscn --quit-after 2` | 通过 |
+| 场景文件检查 | 检查 `scenes/menu.tscn`、`scenes/arena.tscn` | 通过 |
 
-## 本轮自检新增结果
+## 界面流程
 
-- 工程解析检查：通过
-- 主菜单 headless 启动：通过
-- 合作场景 headless 启动：通过
-- 战斗冒烟测试：通过，输出 `SMOKE_RESULT ... ok=true`，并以退出码 0 结束
-- 已修复暂停菜单暂停软锁：暂停菜单设置为 `PROCESS_MODE_WHEN_PAUSED`
-- 已修复合作近战友伤：同队 Fighter 不再被近战命中
-- 已修复倒地角色不可见：倒地状态现在会绘制救援标记
-- 已修复合作死局：一方死亡且另一方倒地时立即进入失败结算
-- 已修复金大招中断冷却：大招被直接攻击打断后仍设置冷却
-- 已加入 `tools/run_selfcheck.bat` 一键自检入口
+- 主菜单显示开始、设置 / 人物招式和退出入口。
+- 设置页显示两名角色的移动与跳跃按键，按 Esc 可关闭。
+- 移动场景显示背景、两名角色和纯色按键提示。
+- 移动场景按 Esc 后可继续、查看人物招式或返回菜单。
 
-自检链仍未覆盖真实双机 ENet、公网直连、网络损伤、Windows 导出包和长时间性能采样。
+## 当前范围
 
-- 主菜单可进入练习、对战、合作。
-- 金支持移动、二段跳、冲刺、拖鞋普攻、投掷、拾取、臭气气团。
-- 东支持移动、二段跳、冲刺、普攻、怒气、卡皮手雷和满怒喷火。
-- 对战包含倒计时、90 秒回合、比分、三局两胜和结算返回。
-- 合作包含三波敌人、投掷敌人、首领、倒地救援、检查点重置和失败重试。
-- HUD 显示生命、怒气、拖鞋、比分/波次与技能状态。
+本轮只验证菜单、场景载入、左右移动、跳跃和暂停返回流程。后续内容暂不纳入本轮验收。
 
-## 尚未在本环境完成的测试
+## 尚未覆盖
 
-- 两台真实电脑的局域网 ENet 联机。
-- 公网 UDP 端口映射与跨网络直连。
-- 30/60/144 FPS 一致性重放、网络丢包/延迟模拟和长时间性能采样。
-- Windows 导出包在未安装 Godot 编辑器机器上的启动验证。
-
-## 已知限制
-
-当前版本是可运行核心玩法原型，角色和敌人主要使用程序绘制的简化表现；项目内 PNG 立绘尚未完成透明抠图、逐帧动画和素材映射表。联机协议、房间创建/加入界面和 ENet 权威同步尚未接入，当前对战与合作为本地双人版本。上述内容未在交付中伪称为已完成。
+- 实机导出包启动验证
+- 长时间运行性能采样
+- 不同窗口尺寸下的视觉回归截图
